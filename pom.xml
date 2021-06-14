@@ -6,7 +6,7 @@
 
   <groupId>io.fabric8</groupId>
   <artifactId>docker-maven-plugin</artifactId>
-  <version>0.33-SNAPSHOT</version>
+  <version>0.36-SNAPSHOT</version>
   <packaging>maven-plugin</packaging>
 
   <name>docker-maven-plugin</name>
@@ -37,6 +37,10 @@
     <maven.version>3.3.9</maven.version>
     <jmockit.version>1.43</jmockit.version>
     <surefire.version>3.0.0-M2</surefire.version>
+    <jib-core.version>0.18.0</jib-core.version>
+    <httpclient.version>4.5.13</httpclient.version>
+    <excludedGroups>io.fabric8.maven.docker.UnixOnlyTests</excludedGroups>
+    <project.build.outputTimestamp>2020-11-14T11:57:00Z</project.build.outputTimestamp>
   </properties>
 
   <dependencies>
@@ -101,7 +105,7 @@
     <dependency>
       <groupId>org.apache.httpcomponents</groupId>
       <artifactId>httpclient</artifactId>
-      <version>4.5.5</version>
+      <version>${httpclient.version}</version>
     </dependency>
 
     <dependency>
@@ -158,9 +162,9 @@
     </dependency>
 
     <dependency>
-      <groupId>joda-time</groupId>
-      <artifactId>joda-time</artifactId>
-      <version>2.10.4</version>
+      <groupId>com.google.cloud.tools</groupId>
+      <artifactId>jib-core</artifactId>
+      <version>${jib-core.version}</version>
     </dependency>
 
     <dependency>
@@ -172,13 +176,19 @@
     <dependency>
       <groupId>com.google.guava</groupId>
       <artifactId>guava</artifactId>
-      <version>29.0-android</version>
+      <version>30.1-jre</version>
     </dependency>
 
     <dependency>
       <groupId>org.codehaus.plexus</groupId>
       <artifactId>plexus-interpolation</artifactId>
       <version>1.24</version>
+    </dependency>
+    
+    <dependency>
+      <groupId>net.jodah</groupId>
+      <artifactId>failsafe</artifactId>
+      <version>2.4.0</version>
     </dependency>
 
 
@@ -201,7 +211,7 @@
     <dependency>
       <groupId>junit</groupId>
       <artifactId>junit</artifactId>
-      <version>4.12</version>
+      <version>4.13.1</version>
       <scope>test</scope>
     </dependency>
 
@@ -239,7 +249,7 @@
 
       <plugin>
         <artifactId>maven-compiler-plugin</artifactId>
-        <version>3.6.2</version>
+        <version>3.8.1</version>
         <configuration>
           <source>1.8</source>
           <target>1.8</target>
@@ -251,7 +261,7 @@
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-plugin-plugin</artifactId>
-        <version>3.5</version>
+        <version>3.6.0</version>
         <configuration>
           <goalPrefix>docker</goalPrefix>
           <skipErrorNoDescriptorsFound>true</skipErrorNoDescriptorsFound>
@@ -315,7 +325,7 @@
       <plugin>
         <groupId>org.codehaus.plexus</groupId>
         <artifactId>plexus-component-metadata</artifactId>
-        <version>1.7.1</version>
+        <version>2.1.0</version>
         <configuration>
           <staticMetadataDirectory>${basedir}/target/filtered-resources/META-INF/plexus</staticMetadataDirectory>
         </configuration>
@@ -334,12 +344,12 @@
         <plugin>
           <groupId>org.apache.maven.plugins</groupId>
           <artifactId>maven-release-plugin</artifactId>
-          <version>2.5.3</version>
+          <version>3.0.0-M1</version>
         </plugin>
 
         <plugin>
           <artifactId>maven-jar-plugin</artifactId>
-          <version>3.0.2</version>
+          <version>3.2.0</version>
           <configuration>
             <archive>
               <addMavenDescriptor>true</addMavenDescriptor>
@@ -355,13 +365,13 @@
         <plugin>
           <groupId>org.apache.maven.plugins</groupId>
           <artifactId>maven-source-plugin</artifactId>
-          <version>3.0.0</version>
+          <version>3.2.0</version>
         </plugin>
 
         <plugin>
           <groupId>org.apache.maven.plugins</groupId>
           <artifactId>maven-javadoc-plugin</artifactId>
-          <version>2.10.4</version>
+          <version>3.2.0</version>
         </plugin>
 
         <plugin>
@@ -519,7 +529,8 @@
             <artifactId>maven-javadoc-plugin</artifactId>
             <configuration>
               <skip>false</skip>
-              <additionalparam>-Xdoclint:none</additionalparam>
+              <source>8</source>
+              <additionalJOption>-Xdoclint:none</additionalJOption>
             </configuration>
             <executions>
               <execution>
@@ -581,7 +592,7 @@
           <plugin>
             <groupId>org.apache.maven.plugins</groupId>
             <artifactId>maven-surefire-plugin</artifactId>
-	    <version>${surefire.version}</version>
+            <version>${surefire.version}</version>
             <configuration>
               <systemPropertyVariables>
                 <!-- JaCoCo runtime must know where to dump coverage: -->
@@ -634,6 +645,44 @@
           </plugin>
         </plugins>
         <defaultGoal>generate-resources asciidoctor:process-asciidoc</defaultGoal>
+      </build>
+    </profile>
+    <profile>
+      <id>unix-test</id>
+      <activation>
+        <os><family>unix</family></os>
+      </activation>
+      <properties>
+        <excludedGroups/>
+      </properties>
+    </profile>
+    <profile>
+      <id>sonar</id>
+      <properties>
+        <sonar.projectKey>fabric8io_docker-maven-plugin</sonar.projectKey>
+        <sonar.moduleKey>${project.artifactId}</sonar.moduleKey>
+        <sonar.organization>fabric8io</sonar.organization>
+        <sonar.host.url>https://sonarcloud.io</sonar.host.url>
+        <sonar.login>${env.SONAR_TOKEN}</sonar.login>
+        <sonar.java.coveragePlugin>jacoco</sonar.java.coveragePlugin>
+        <sonar.dynamicAnalysis>reuseReports</sonar.dynamicAnalysis>
+      </properties>
+      <build>
+        <plugins>
+          <plugin>
+            <groupId>org.sonarsource.scanner.maven</groupId>
+            <artifactId>sonar-maven-plugin</artifactId>
+            <executions>
+              <execution>
+                <id>sonar</id>
+                <phase>install</phase>
+                <goals>
+                  <goal>sonar</goal>
+                </goals>
+              </execution>
+            </executions>
+          </plugin>
+        </plugins>
       </build>
     </profile>
   </profiles>

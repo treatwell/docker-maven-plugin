@@ -47,6 +47,10 @@ public class RegistryService {
             BuildImageConfiguration buildConfig = imageConfig.getBuildConfiguration();
             String name = imageConfig.getName();
             if (buildConfig != null) {
+                if (buildConfig.skipPush()) {
+                    log.info("%s : Skipped pushing", imageConfig.getDescription());
+                    continue;
+                }
                 String configuredRegistry = EnvUtil.firstRegistryOf(
                     new ImageName(imageConfig.getName()).getRegistry(),
                     imageConfig.getRegistry(),

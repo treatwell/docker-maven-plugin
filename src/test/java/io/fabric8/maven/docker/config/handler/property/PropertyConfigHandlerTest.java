@@ -31,6 +31,7 @@ import io.fabric8.maven.docker.config.AssemblyConfiguration;
 import io.fabric8.maven.docker.config.BuildImageConfiguration;
 import io.fabric8.maven.docker.config.CleanupMode;
 import io.fabric8.maven.docker.config.ConfigHelper;
+import io.fabric8.maven.docker.config.CopyConfiguration;
 import io.fabric8.maven.docker.config.ImageConfiguration;
 import io.fabric8.maven.docker.config.LogConfiguration;
 import io.fabric8.maven.docker.config.RestartPolicy;
@@ -40,6 +41,8 @@ import io.fabric8.maven.docker.config.WaitConfiguration;
 import io.fabric8.maven.docker.config.handler.AbstractConfigHandlerTest;
 import mockit.Expectations;
 import mockit.Mocked;
+import org.apache.maven.plugins.assembly.model.Assembly;
+import org.apache.maven.plugins.assembly.model.DependencySet;
 import org.apache.maven.project.MavenProject;
 import org.junit.Before;
 import org.junit.Test;
@@ -78,6 +81,14 @@ public class PropertyConfigHandlerTest extends AbstractConfigHandlerTest {
         assertTrue(resolveExternalImageConfig(getSkipTestData(ConfigKey.SKIP_BUILD, true)).getBuildConfiguration().skip());
 
         assertFalse(resolveExternalImageConfig(new String[] {k(ConfigKey.NAME), "image", k(ConfigKey.FROM), "busybox"}).getBuildConfiguration().skip());
+    }
+
+    @Test
+    public void testSkipPush() {
+        assertFalse(resolveExternalImageConfig(getSkipTestData(ConfigKey.SKIP_PUSH, false)).getBuildConfiguration().skipPush());
+        assertTrue(resolveExternalImageConfig(getSkipTestData(ConfigKey.SKIP_PUSH, true)).getBuildConfiguration().skipPush());
+
+        assertFalse(resolveExternalImageConfig(new String[] {k(ConfigKey.NAME), "image", k(ConfigKey.FROM), "busybox"}).getBuildConfiguration().skipPush());
     }
 
     @Test
@@ -658,11 +669,58 @@ public class PropertyConfigHandlerTest extends AbstractConfigHandlerTest {
         List<ImageConfiguration> configs = resolveImage(imageConfiguration, props(getTestAssemblyData()));
         assertEquals(1, configs.size());
 
-        AssemblyConfiguration config = configs.get(0).getBuildConfiguration().getAssemblyConfiguration();
+        List<AssemblyConfiguration> assemblies = configs.get(0).getBuildConfiguration().getAssemblyConfigurations();
+        assertEquals(1, assemblies.size());
+
+        AssemblyConfiguration config = assemblies.get(0);
         assertEquals("user", config.getUser());
         assertEquals("project", config.getDescriptorRef());
         assertFalse(config.exportTargetDir());
         assertTrue(config.isIgnorePermissions());
+    }
+
+    @Test
+    public void testMultipleAssemblies() {
+        List<ImageConfiguration> configs = resolveImage(imageConfiguration, props(getTestMultipleAssemblyData()));
+        assertEquals(1, configs.size());
+
+        List<AssemblyConfiguration> assemblies = configs.get(0).getBuildConfiguration().getAssemblyConfigurations();
+        assertEquals(2, assemblies.size());
+
+        AssemblyConfiguration config = assemblies.get(0);
+        assertEquals("user", config.getUser());
+        assertEquals("project", config.getDescriptorRef());
+        assertFalse(config.exportTargetDir());
+        assertTrue(config.isIgnorePermissions());
+
+        config = assemblies.get(1);
+        assertEquals("user", config.getUser());
+        assertEquals("artifact", config.getDescriptorRef());
+        assertEquals("art", config.getName());
+        assertFalse(config.exportTargetDir());
+        assertTrue(config.isIgnorePermissions());
+    }
+
+    @Test
+    public void testAssemblyInline() throws Exception {
+        Assembly assembly = new Assembly();
+        assembly.addDependencySet(new DependencySet());
+
+        imageConfiguration = new ImageConfiguration.Builder()
+                        .registry("docker.io")
+                        .name("test")
+                        .buildConfig(new BuildImageConfiguration.Builder()
+                                .assembly(new AssemblyConfiguration.Builder().assemblyDef(assembly).build())
+                                .build())
+                        .externalConfig(externalConfigMode(PropertyMode.Only))
+                        .build();
+
+        List<ImageConfiguration> configs = resolveImage(imageConfiguration, props(getTestAssemblyData()));
+        assertEquals(1, configs.size());
+
+        AssemblyConfiguration config = configs.get(0).getBuildConfiguration().getAssemblyConfiguration();
+        assertNotNull(config.getInline());
+        assertEquals(1, config.getInline().getDependencySets().size());
     }
 
     @Test
@@ -724,7 +782,7 @@ public class PropertyConfigHandlerTest extends AbstractConfigHandlerTest {
 
     @Test
     public void testCacheFrom() {
-        String[] testData = new String[] {k(ConfigKey.NAME), "image", k(ConfigKey.CACHE_FROM), "foo/bar:latest", k(ConfigKey.FROM), "base"};
+        String[] testData = new String[] {k(ConfigKey.NAME), "image", k(ConfigKey.CACHE_FROM)+".1", "foo/bar:latest", k(ConfigKey.FROM), "base"};
 
         ImageConfiguration config = resolveExternalImageConfig(testData);
         assertEquals(Collections.singletonList("foo/bar:latest"), config.getBuildConfiguration().getCacheFrom());
@@ -743,7 +801,7 @@ public class PropertyConfigHandlerTest extends AbstractConfigHandlerTest {
                         "docker.from", "busybox"
                 ));
 
-        assertNull(configs.get(0).getBuildConfiguration().getCacheFrom().get(0));
+        assertNull(configs.get(0).getBuildConfiguration().getCacheFrom());
     }
 
     @Test
@@ -852,6 +910,38 @@ public class PropertyConfigHandlerTest extends AbstractConfigHandlerTest {
     }
 
     @Test
+    public void testCopyConfiguration() {
+        imageConfiguration = new ImageConfiguration.Builder()
+                .externalConfig(new HashMap<>())
+                .copyConfig(new CopyConfiguration.Builder()
+                        .entries(Collections.singletonList(new CopyConfiguration.Entry("/test4/path", "project/dir")))
+                        .build())
+                .build();
+
+        makeExternalConfigUse(PropertyMode.Override);
+
+        final List<ImageConfiguration> configs = resolveImage(
+                imageConfiguration, props(
+                        k(ConfigKey.NAME), "image",
+                        k(ConfigKey.FROM), "base",
+                        k(ConfigKey.COPY_ENTRIES) + ".1", "/test1",
+                        k(ConfigKey.COPY_ENTRIES) + ".2." + CopyConfiguration.CONTAINER_PATH_PROPERTY, "/test2",
+                        k(ConfigKey.COPY_ENTRIES) + ".2." + CopyConfiguration.HOST_DIRECTORY_PROPERTY, "/root/dir",
+                        k(ConfigKey.COPY_ENTRIES) + ".3." + CopyConfiguration.CONTAINER_PATH_PROPERTY, "/test3/path",
+                        k(ConfigKey.COPY_ENTRIES) + ".3." + CopyConfiguration.HOST_DIRECTORY_PROPERTY, "project/dir"
+                ));
+
+        assertEquals(1, configs.size());
+        final CopyConfiguration copyConfig = configs.get(0).getCopyConfiguration();
+        final List<CopyConfiguration.Entry> copyEntries = copyConfig.getEntries();
+
+        assertEquals(3, copyEntries.size());
+        assertCopyEntryEquals(new CopyConfiguration.Entry("/test1", null), copyEntries.get(0));
+        assertCopyEntryEquals(new CopyConfiguration.Entry("/test2", "/root/dir"), copyEntries.get(1));
+        assertCopyEntryEquals(new CopyConfiguration.Entry("/test3/path", "project/dir"), copyEntries.get(2));
+    }
+
+    @Test
     public void testNoAssembly() throws Exception {
         Properties props = props(k(ConfigKey.NAME), "image");
         //List<ImageConfiguration> configs = configHandler.resolve(imageConfiguration, props);
@@ -924,7 +1014,7 @@ public class PropertyConfigHandlerTest extends AbstractConfigHandlerTest {
 
     private ImageConfiguration resolveExternalImageConfig(String[] testData) {
         Map<String, String> external = new HashMap<>();
-        external.put("type", "props");
+        external.put("type", "properties");
 
         ImageConfiguration config = new ImageConfiguration.Builder().name("image").alias("alias").externalConfig(external).build();
 
@@ -954,7 +1044,10 @@ public class PropertyConfigHandlerTest extends AbstractConfigHandlerTest {
          * validate only the descriptor is required and defaults are all used, 'testAssembly' validates
          * all options can be set
          */
-        AssemblyConfiguration assemblyConfig = buildConfig.getAssemblyConfiguration();
+        List<AssemblyConfiguration> assemblyConfigurations = buildConfig.getAssemblyConfigurations();
+        assertEquals(1, assemblyConfigurations.size());
+
+        AssemblyConfiguration assemblyConfig = assemblyConfigurations.get(0);
 
         assertEquals("/maven", assemblyConfig.getTargetDir());
         assertEquals("assembly.xml", assemblyConfig.getDescriptor());
@@ -992,6 +1085,7 @@ public class PropertyConfigHandlerTest extends AbstractConfigHandlerTest {
         assertEquals((Long) 1L, runConfig.getMemory());
         assertEquals((Long) 1L, runConfig.getMemorySwap());
         assertEquals((Long) 1000000000L, runConfig.getCpus());
+        assertEquals("default",runConfig.getIsolation());
         assertEquals((Long) 1L, runConfig.getCpuShares());
         assertEquals("0,1", runConfig.getCpuSet());
         assertEquals("/tmp/envProps.txt",runConfig.getEnvPropertyFile());
@@ -1065,6 +1159,24 @@ public class PropertyConfigHandlerTest extends AbstractConfigHandlerTest {
             };
     }
 
+    private String[] getTestMultipleAssemblyData() {
+        return new String[] {
+                k(ConfigKey.FROM), "busybox",
+                k(ConfigKey.ASSEMBLIES) + ".1." + k(ConfigKey.ASSEMBLY_BASEDIR), "/basedir",
+                k(ConfigKey.ASSEMBLIES) + ".1." + k(ConfigKey.ASSEMBLY_DESCRIPTOR_REF), "project",
+                k(ConfigKey.ASSEMBLIES) + ".1." + k(ConfigKey.ASSEMBLY_EXPORT_BASEDIR), "false",
+                k(ConfigKey.ASSEMBLIES) + ".1." + k(ConfigKey.ASSEMBLY_IGNORE_PERMISSIONS), "true",
+                k(ConfigKey.ASSEMBLIES) + ".1." + k(ConfigKey.ASSEMBLY_USER), "user",
+                k(ConfigKey.ASSEMBLIES) + ".2." + k(ConfigKey.ASSEMBLY_BASEDIR), "/basedir",
+                k(ConfigKey.ASSEMBLIES) + ".2." + k(ConfigKey.ASSEMBLY_DESCRIPTOR_REF), "artifact",
+                k(ConfigKey.ASSEMBLIES) + ".2." + k(ConfigKey.ASSEMBLY_EXPORT_BASEDIR), "false",
+                k(ConfigKey.ASSEMBLIES) + ".2." + k(ConfigKey.ASSEMBLY_IGNORE_PERMISSIONS), "true",
+                k(ConfigKey.ASSEMBLIES) + ".2." + k(ConfigKey.ASSEMBLY_USER), "user",
+                k(ConfigKey.ASSEMBLIES) + ".2." + k(ConfigKey.ASSEMBLY_NAME), "art",
+                k(ConfigKey.NAME), "image",
+        };
+    }
+
     private String[] getTestData() {
         return new String[] {
             k(ConfigKey.ALIAS), "alias",
@@ -1076,6 +1188,7 @@ public class PropertyConfigHandlerTest extends AbstractConfigHandlerTest {
             k(ConfigKey.SECURITY_OPTS) + ".1", "seccomp=unconfined",
             k(ConfigKey.CPUS), "1000000000",
             k(ConfigKey.CPUSET), "0,1",
+            k(ConfigKey.ISOLATION),"default",
             k(ConfigKey.CPUSHARES), "1",
             k(ConfigKey.CMD), "command.sh",
             k(ConfigKey.DNS) + ".1", "8.8.8.8",
@@ -1146,5 +1259,10 @@ public class PropertyConfigHandlerTest extends AbstractConfigHandlerTest {
     	assertEquals(expected.getName(), actual.getName());
         assertEquals(expected.getSoft(), actual.getSoft());
         assertEquals(expected.getHard(), actual.getHard());
+    }
+
+    private void assertCopyEntryEquals(CopyConfiguration.Entry expected, CopyConfiguration.Entry actual) {
+        assertEquals(expected.getContainerPath(), actual.getContainerPath());
+        assertEquals(expected.getHostDirectory(), actual.getHostDirectory());
     }
 }

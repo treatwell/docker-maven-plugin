@@ -27,6 +27,12 @@ public class ImageConfiguration implements StartOrderResolver.Resolvable, Serial
     @Parameter
     private String stopNamePattern;
 
+    /**
+     * Pattern for the name of containers used by {@link io.fabric8.maven.docker.CopyMojo CopyMojo}.
+     */
+    @Parameter
+    private String copyNamePattern;
+
     @Parameter
     private String removeNamePattern;
 
@@ -38,6 +44,9 @@ public class ImageConfiguration implements StartOrderResolver.Resolvable, Serial
 
     @Parameter
     private WatchImageConfiguration watch;
+
+    @Parameter
+    private CopyConfiguration copy;
 
     @Parameter
     private Map<String,String> external;
@@ -64,6 +73,14 @@ public class ImageConfiguration implements StartOrderResolver.Resolvable, Serial
     }
 
     /**
+     * Changes image registry to specified one
+     * @param registry string value for registry to be modified
+     */
+    public void setRegistry(String registry) {
+        this.registry = registry;
+    }
+
+    /**
      * Override externalConfiguration when defined via special property.
      *
      * @param externalConfiguration Map with alternative config
@@ -85,6 +102,10 @@ public class ImageConfiguration implements StartOrderResolver.Resolvable, Serial
         return stopNamePattern;
     }
 
+    public String getCopyNamePattern() {
+        return copyNamePattern;
+    }
+
     public String getRemoveNamePattern() {
         return removeNamePattern;
     }
@@ -99,6 +120,10 @@ public class ImageConfiguration implements StartOrderResolver.Resolvable, Serial
 
     public WatchImageConfiguration getWatchConfiguration() {
         return watch;
+    }
+
+    public CopyConfiguration getCopyConfiguration() {
+        return copy;
     }
 
     public Map<String, String> getExternalConfig() {
@@ -218,6 +243,11 @@ public class ImageConfiguration implements StartOrderResolver.Resolvable, Serial
             return this;
         }
 
+        public Builder copyNamePattern(String copyNamePattern) {
+            config.copyNamePattern = copyNamePattern;
+            return this;
+        }
+
         public Builder stopNamePattern(String stopNamePattern) {
             config.stopNamePattern = stopNamePattern;
             return this;
@@ -249,6 +279,11 @@ public class ImageConfiguration implements StartOrderResolver.Resolvable, Serial
 
         public Builder watchConfig(WatchImageConfiguration watchConfig) {
             config.watch = watchConfig;
+            return this;
+        }
+
+        public Builder copyConfig(CopyConfiguration copyConfig) {
+            config.copy = copyConfig;
             return this;
         }
     }

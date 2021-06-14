@@ -18,6 +18,7 @@ package io.fabric8.maven.docker.service;/*
 import io.fabric8.maven.docker.assembly.ArchiverCustomizer;
 import io.fabric8.maven.docker.assembly.AssemblyFiles;
 import io.fabric8.maven.docker.assembly.DockerAssemblyManager;
+import io.fabric8.maven.docker.config.AssemblyConfiguration;
 import io.fabric8.maven.docker.config.BuildImageConfiguration;
 import io.fabric8.maven.docker.config.ImageConfiguration;
 import io.fabric8.maven.docker.util.Logger;
@@ -44,6 +45,17 @@ public class ArchiveService {
     public ArchiveService(DockerAssemblyManager dockerAssemblyManager,Logger log) {
         this.log = log;
         this.dockerAssemblyManager = dockerAssemblyManager;
+    }
+
+    /**
+     * Extracts an archive returned when copying file or directory from container.
+     *
+     * @param archiveFile a tar archive to extract
+     * @param destinationDirectory directory where to place extracted content
+     * @throws MojoExecutionException if an error occurs during extracting.
+     */
+    public void extractDockerCopyArchive(File archiveFile, File destinationDirectory) throws MojoExecutionException {
+        dockerAssemblyManager.extractDockerTarArchive(archiveFile, destinationDirectory);
     }
 
     /**
@@ -88,12 +100,19 @@ public class ArchiveService {
      * @return mapping of assembly files
      * @throws MojoExecutionException
      */
-    public AssemblyFiles getAssemblyFiles(ImageConfiguration imageConfig, MojoParameters mojoParameters)
+    public AssemblyFiles getAssemblyFiles(ImageConfiguration imageConfig, String assemblyName, MojoParameters mojoParameters)
         throws MojoExecutionException {
 
         String name = imageConfig.getName();
         try {
-            return dockerAssemblyManager.getAssemblyFiles(name, imageConfig.getBuildConfiguration(), mojoParameters, log);
+            List<AssemblyConfiguration> assemblyConfigurations = imageConfig.getBuildConfiguration().getAssemblyConfigurations();
+            AssemblyConfiguration assemblyConfig = assemblyConfigurations.stream().filter(a -> a.getName().equals(assemblyName)).findFirst().orElse(null);
+
+            if (assemblyConfig == null) {
+                throw new IllegalArgumentException(String.format("Provided assembly name \"%s\" does not match any configured assemblies.", assemblyName));
+            }
+
+            return dockerAssemblyManager.getAssemblyFiles(name, assemblyConfig, mojoParameters, log);
         } catch (InvalidAssemblerConfigurationException | ArchiveCreationException | AssemblyFormattingException e) {
             throw new MojoExecutionException("Cannot extract assembly files for image " + name + ": " + e, e);
         }

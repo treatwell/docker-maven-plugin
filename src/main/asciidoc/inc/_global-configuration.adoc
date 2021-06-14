@@ -105,6 +105,14 @@ By default a progress meter is printed out on the console, which is omitted when
 | Number of parallel connections are allowed to be opened to the Docker Host. For parsing log output, a connection needs to be kept open (as well for the wait features), so don't put that number to low. Default is 100 which should be suitable for most of the cases.
 | `docker.maxConnections`
 
+| *jib*
+| Delegate Image Build process to https://github.com/GoogleContainerTools/jib[JIB], `false` by default. Note that this option is applicable only for <<docker:build,build>> and <<docker:push,push>> goals, other goals won't work if this is enabled (since they dependend on Docker specific features)
+| `docker.build.jib`
+
+| *jibImageFormat*
+| Format of the image to be built. Values can be `oci` and `docker` with `docker` as default value
+| `docker.build.jib.imageFormat`
+
 | *outputDirectory*
 | Default output directory to be used by this plugin. The default value is `target/docker` and is only used for the goal `{plugin}:build`.
 | `docker.target.dir`
@@ -129,6 +137,10 @@ By default a progress meter is printed out on the console, which is omitted when
 | If set dont push any images even when `{plugin}:push` is called.
 | `docker.skip.push`
 
+| *skipPom*
+| If set to `true` this plugin will skip every projects, where `project.packaging` is set to `pom`.
+| `docker.skip.pom`
+
 | *skipRun*
 | If set dont create and start any containers with `{plugin}:start` or `{plugin}:run`
 | `docker.skip.run`
@@ -150,6 +162,10 @@ If set to `true` this plugin won't remove any tags with `{plugin}:remove`. +
 | *useColor*
 | Whether to use colored log output. By default this is switched on when running on a console, off otherwise.
 | `docker.useColor`
+
+| *outputFile*
+| If specified, this parameter will cause the logs to be written to the path specified, instead of writing to the console.
+| `outputFile`
 
 | *verbose*
 | String attribute for switching on verbose output on standard output (stdout). It takes a comma separated list of string values to switch on various verbosity groups.

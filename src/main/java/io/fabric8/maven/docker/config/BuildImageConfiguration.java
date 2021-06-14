@@ -1,13 +1,15 @@
 package io.fabric8.maven.docker.config;
 
-import java.io.File;
-import java.io.Serializable;
-import java.util.*;
-
-import io.fabric8.maven.docker.util.*;
+import io.fabric8.maven.docker.util.DeepCopy;
+import io.fabric8.maven.docker.util.EnvUtil;
+import io.fabric8.maven.docker.util.Logger;
+import io.fabric8.maven.docker.util.MojoParameters;
 import org.apache.maven.plugins.annotations.Parameter;
 
 import javax.annotation.Nonnull;
+import java.io.File;
+import java.io.Serializable;
+import java.util.*;
 
 /**
  * @author roland
@@ -122,6 +124,9 @@ public class BuildImageConfiguration implements Serializable {
     private Boolean noCache;
 
     @Parameter
+    private Boolean squash;
+
+    @Parameter
     private Boolean optimise;
 
     @Parameter
@@ -162,7 +167,13 @@ public class BuildImageConfiguration implements Serializable {
     private AssemblyConfiguration assembly;
 
     @Parameter
+    private List<AssemblyConfiguration> assemblies;
+
+    @Parameter
     private Boolean skip;
+
+    @Parameter
+    private Boolean skipPush;
 
     @Parameter
     private ArchiveCompression compression = ArchiveCompression.none;
@@ -259,8 +270,28 @@ public class BuildImageConfiguration implements Serializable {
         return workdir;
     }
 
+    /**
+     * @deprecated Use {@link #getAssemblyConfigurations()} instead.
+     */
+    @Deprecated
     public AssemblyConfiguration getAssemblyConfiguration() {
         return assembly;
+    }
+
+    @Nonnull
+    public List<AssemblyConfiguration> getAssemblyConfigurations() {
+        final List<AssemblyConfiguration> assemblyConfigurations = new ArrayList<>();
+        if (assemblies != null) {
+            for (AssemblyConfiguration config : assemblies) {
+                if (config != null) {
+                    assemblyConfigurations.add(config);
+                }
+            }
+        }
+        if (assembly != null) {
+            assemblyConfigurations.add(assembly);
+        }
+        return assemblyConfigurations;
     }
 
     @Nonnull
@@ -317,6 +348,13 @@ public class BuildImageConfiguration implements Serializable {
         return false;
     }
 
+    public boolean squash() {
+        if (squash != null) {
+            return squash;
+        }
+        return false;
+    }
+
     public boolean optimise() {
         return optimise != null ? optimise : false;
     }
@@ -325,8 +363,16 @@ public class BuildImageConfiguration implements Serializable {
         return skip != null ? skip : false;
     }
 
+    public boolean skipPush() {
+        return skipPush != null ? skipPush : false;
+    }
+
     public Boolean getNoCache() {
         return noCache != null ? noCache : nocache;
+    }
+
+    public Boolean getSquash() {
+        return squash != null ? squash : false;
     }
 
     public Boolean getOptimise() {
@@ -335,6 +381,10 @@ public class BuildImageConfiguration implements Serializable {
 
     public Boolean getSkip() {
         return skip;
+    }
+
+    public Boolean getSkipPush() {
+        return skipPush;
     }
 
     public ArchiveCompression getCompression() {
@@ -478,6 +528,11 @@ public class BuildImageConfiguration implements Serializable {
             return this;
         }
 
+        public Builder assemblies(List<AssemblyConfiguration> assemblies) {
+            config.assemblies = assemblies;
+            return this;
+        }
+
         public Builder ports(List<String> ports) {
             config.ports = ports;
             return this;
@@ -556,6 +611,11 @@ public class BuildImageConfiguration implements Serializable {
             return this;
         }
 
+        public Builder squash(Boolean squash) {
+            config.squash = squash;
+            return this;
+        }
+
         public Builder optimise(Boolean optimise) {
             config.optimise = optimise;
             return this;
@@ -583,6 +643,11 @@ public class BuildImageConfiguration implements Serializable {
             return this;
         }
 
+        public Builder skipPush(Boolean skipPush) {
+            config.skipPush = skipPush;
+            return this;
+        }
+
         public Builder buildOptions(Map<String,String> buildOptions) {
             config.buildOptions = buildOptions;
             return this;
@@ -603,6 +668,8 @@ public class BuildImageConfiguration implements Serializable {
         if (healthCheck != null) {
             healthCheck.validate();
         }
+
+        ensureUniqueAssemblyNames(log);
 
         if (command != null) {
             log.warn("<command> in the <build> configuration is deprecated and will be be removed soon");
@@ -631,6 +698,18 @@ public class BuildImageConfiguration implements Serializable {
             return "1.21";
         } else {
             return null;
+        }
+    }
+
+    private void ensureUniqueAssemblyNames(Logger log) {
+        List<AssemblyConfiguration> assemblyConfigurations = getAssemblyConfigurations();
+        Set<String> assemblyNames = new HashSet<>();
+        for (AssemblyConfiguration config : assemblyConfigurations) {
+            boolean wasElementAbsent = assemblyNames.add(config.getName());
+            if (!wasElementAbsent) {
+                log.error("Multiple assemblies use the name %s. Please assign each assembly a unique name.");
+                throw new IllegalArgumentException("Assembly names must be unique");
+            }
         }
     }
 
@@ -686,14 +765,15 @@ public class BuildImageConfiguration implements Serializable {
 
         // TODO: Remove the following deprecated handling section
         if (dockerArchive == null) {
-            String deprecatedDockerFileDir =
-                getAssemblyConfiguration() != null ?
-                    getAssemblyConfiguration().getDockerFileDir() :
-                    null;
-            if (deprecatedDockerFileDir != null) {
+            Optional<String> deprecatedDockerFileDir =
+                    getAssemblyConfigurations().stream()
+                            .map(AssemblyConfiguration::getDockerFileDir)
+                            .filter(Objects::nonNull)
+                            .findFirst();
+            if (deprecatedDockerFileDir.isPresent()) {
                 log.warn("<dockerFileDir> in the <assembly> section of a <build> configuration is deprecated");
                 log.warn("Please use <dockerFileDir> or <dockerFile> directly within the <build> configuration instead");
-                return new File(deprecatedDockerFileDir,"Dockerfile");
+                return new File(deprecatedDockerFileDir.get(),"Dockerfile");
             }
         }
 

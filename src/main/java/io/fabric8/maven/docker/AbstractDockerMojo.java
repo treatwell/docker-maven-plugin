@@ -6,22 +6,30 @@ import java.util.Date;
 import java.util.List;
 import java.util.Map;
 import java.util.Properties;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 
 import com.google.common.collect.ImmutableList;
 import io.fabric8.maven.docker.access.DockerAccess;
+import io.fabric8.maven.docker.access.DockerAccessException;
 import io.fabric8.maven.docker.access.ExecException;
 import io.fabric8.maven.docker.config.BuildImageConfiguration;
 import io.fabric8.maven.docker.config.ConfigHelper;
 import io.fabric8.maven.docker.config.DockerMachineConfiguration;
 import io.fabric8.maven.docker.config.ImageConfiguration;
 import io.fabric8.maven.docker.config.RegistryAuthConfiguration;
+import io.fabric8.maven.docker.config.RunImageConfiguration;
 import io.fabric8.maven.docker.config.VolumeConfiguration;
 import io.fabric8.maven.docker.config.handler.ImageConfigResolver;
 import io.fabric8.maven.docker.log.LogDispatcher;
 import io.fabric8.maven.docker.log.LogOutputSpecFactory;
+import io.fabric8.maven.docker.model.Container;
 import io.fabric8.maven.docker.service.DockerAccessFactory;
 import io.fabric8.maven.docker.service.ImagePullManager;
+import io.fabric8.maven.docker.service.QueryService;
 import io.fabric8.maven.docker.service.RegistryService;
+import io.fabric8.maven.docker.service.RegistryService.RegistryConfig;
 import io.fabric8.maven.docker.service.ServiceHub;
 import io.fabric8.maven.docker.service.ServiceHubFactory;
 import io.fabric8.maven.docker.util.AnsiLogger;
@@ -30,6 +38,8 @@ import io.fabric8.maven.docker.util.EnvUtil;
 import io.fabric8.maven.docker.util.GavLabel;
 import io.fabric8.maven.docker.util.ImageNameFormatter;
 import io.fabric8.maven.docker.util.Logger;
+import io.fabric8.maven.docker.util.NamePatternUtil;
+
 import org.apache.maven.execution.MavenSession;
 import org.apache.maven.plugin.AbstractMojo;
 import org.apache.maven.plugin.MojoExecution;
@@ -92,6 +102,10 @@ public abstract class AbstractDockerMojo extends AbstractMojo implements Context
 
     @Component
     protected DockerAccessFactory dockerAccessFactory;
+
+    // Redirect the plugin output to a file
+    @Parameter(property = "outputFile")
+    private String outputFile;
 
     @Parameter(property = "docker.autoPull")
     protected String autoPull;
@@ -167,6 +181,18 @@ public abstract class AbstractDockerMojo extends AbstractMojo implements Context
     @Parameter(property = "docker.maxConnections", defaultValue = "100")
     private int maxConnections;
 
+    @Parameter(property = "docker.build.jib", defaultValue = "false")
+    public boolean jib;
+
+    @Parameter(property = "docker.build.jib.imageFormat", defaultValue = "docker")
+    public String jibImageFormat;
+
+    @Parameter(property = "docker.source.dir", defaultValue="src/main/docker")
+    public String sourceDirectory;
+
+    @Parameter(property = "docker.target.dir", defaultValue="target/docker")
+    public String outputDirectory;
+
     // Authentication information
     @Parameter
     private RegistryAuthConfiguration authConfig;
@@ -200,7 +226,7 @@ public abstract class AbstractDockerMojo extends AbstractMojo implements Context
     // Handler dealing with authentication credentials
     private AuthConfigFactory authConfigFactory;
 
-    protected Logger log;
+    protected AnsiLogger log;
 
     private String minimalApiVersion;
 
@@ -216,7 +242,14 @@ public abstract class AbstractDockerMojo extends AbstractMojo implements Context
     public void execute() throws MojoExecutionException, MojoFailureException {
         if (!skip) {
             boolean ansiRestore = Ansi.isEnabled();
-            log = new AnsiLogger(getLog(), useColorForLogging(), verbose, !settings.getInteractiveMode(), getLogPrefix());
+            File output = null;
+            if (outputFile != null) {
+                output = new File(outputFile);
+                if (output.exists()) {
+                    output.delete();
+                }
+            }
+            log = new AnsiLogger(getLog(), useColorForLogging(), verbose, !settings.getInteractiveMode(), getLogPrefix(), output);
 
             try {
                 authConfigFactory.setLog(log);
@@ -249,6 +282,11 @@ public abstract class AbstractDockerMojo extends AbstractMojo implements Context
                 }
             } finally {
                 Ansi.setEnabled(ansiRestore);
+                try {
+                    log.close();
+                } catch (IOException exp) {
+                    logException(exp);
+                }
             }
         }
     }
@@ -370,7 +408,7 @@ public abstract class AbstractDockerMojo extends AbstractMojo implements Context
      * @return <code >true</code> as the default value
      */
     protected boolean isDockerAccessRequired() {
-        return true;
+        return Boolean.FALSE.equals(jib);
     }
 
     /**
@@ -488,5 +526,73 @@ public abstract class AbstractDockerMojo extends AbstractMojo implements Context
         return new ImageConfiguration.Builder(image).buildConfig(buildConfig).build();
     }
 
+    protected boolean invokedTogetherWithDockerStart() {
+        Boolean startCalled = (Boolean) getPluginContext().get(CONTEXT_KEY_START_CALLED);
+        return startCalled != null && startCalled;
+    }
 
+    protected Matcher getImageNameMatcher(String pattern, String configName) throws MojoExecutionException {
+        try {
+            String nameRegex = NamePatternUtil.convertNamePatternList(pattern, NamePatternUtil.IMAGE_FIELD, true);
+            if (nameRegex == null) {
+                log.debug("No image name patterns in %s %s", configName, pattern);
+                return null;
+            }
+            log.debug("Converted %s %s into image name regular expression %s", configName, pattern, nameRegex);
+            return Pattern.compile(nameRegex).matcher("");
+        } catch (IllegalArgumentException e) {
+            throw new MojoExecutionException(e.getMessage(), e);
+        }
+    }
+
+    protected Matcher getContainerNameMatcher(String pattern, String configName) throws MojoExecutionException {
+        try {
+            String nameRegex = NamePatternUtil.convertNamePatternList(pattern, NamePatternUtil.NAME_FIELD, true);
+            if (nameRegex == null) {
+                log.debug("No container name patterns in %s %s", configName, pattern);
+                return null;
+            }
+            log.debug("Converted %s %s into container name regular expression %s", configName, pattern, nameRegex);
+            return Pattern.compile(nameRegex).matcher("");
+        } catch (IllegalArgumentException e) {
+            throw new MojoExecutionException(e.getMessage(), e);
+        }
+    }
+
+    protected List<Container> getContainersForPattern(QueryService queryService, boolean all, Matcher imageNameMatcher,
+            Matcher containerNameMatcher, String patternConfigName) throws IOException {
+        return queryService.listContainers(all).stream()
+                .filter(c -> containerMatchesPattern(c, imageNameMatcher, containerNameMatcher, patternConfigName))
+                .collect(Collectors.toList());
+    }
+
+    protected void pullImage(QueryService queryService, RegistryService registryService, ImageConfiguration imageConfig,
+            String pullRegistry) throws MojoExecutionException, DockerAccessException {
+        String imageName = imageConfig.getName();
+        RunImageConfiguration runConfiguration = imageConfig.getRunConfiguration();
+        ImagePullManager pullManager = getImagePullManager(determinePullPolicy(runConfiguration), autoPull);
+        RegistryConfig registryConfig = getRegistryConfig(pullRegistry);
+        registryService.pullImageWithPolicy(imageName, pullManager, registryConfig, queryService.hasImage(imageName));
+    }
+
+    private boolean containerMatchesPattern(Container container, Matcher imageNameMatcher, Matcher containerNameMatcher,
+            String patternConfigName) {
+        if (imageNameMatcher != null && container.getImage() != null && imageNameMatcher.reset(container.getImage())
+                .find()) {
+            log.debug("Container image %s matched %s", container.getImage(), patternConfigName);
+            return true;
+        } else if (containerNameMatcher != null && container.getName() != null && containerNameMatcher
+                .reset(container.getName()).find()) {
+            log.debug("Container name %s matched %s", container.getName(), patternConfigName);
+            return true;
+        } else {
+            log.debug("Neither container image %s nor name %s matched %s", container.getImage(), container.getName(),
+                    patternConfigName);
+            return false;
+        }
+    }
+
+    private String determinePullPolicy(RunImageConfiguration runConfig) {
+        return runConfig.getImagePullPolicy() != null ? runConfig.getImagePullPolicy() : imagePullPolicy;
+    }
 }

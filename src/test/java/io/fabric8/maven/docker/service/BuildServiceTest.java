@@ -154,6 +154,45 @@ public class BuildServiceTest {
     }
 
     @Test
+    public void testBuildImageWithCacheFrom_ShouldPullImage() throws Exception {
+        BuildImageConfiguration buildConfig = new BuildImageConfiguration.Builder()
+                .cleanup("false")
+                .cacheFrom("fabric8/s1i-java")
+                .dockerFile(DockerFileUtilTest.class.getResource("Dockerfile_from_simple").getPath())
+                .filter("false")
+                .build();
+
+        buildConfig.initAndValidate(logger);
+
+        imageConfig = new ImageConfiguration.Builder()
+                .name("build-image")
+                .alias("build-alias")
+                .buildConfig(buildConfig)
+                .build();
+
+        final ImagePullManager pullManager = new ImagePullManager(null,null, null);
+        final BuildService.BuildContext buildContext = new BuildService.BuildContext.Builder()
+                .mojoParameters(mojoParameters)
+                .build();
+
+        new Expectations(mojoParameters) {{
+            mojoParameters.getProject(); result = mavenProject;
+            mavenProject.getProperties(); result = new Properties();
+        }};
+
+        File buildArchive = buildService.buildArchive(imageConfig, buildContext, "");
+        buildService.buildImage(imageConfig, pullManager, buildContext, buildArchive);
+
+        //verify that tries to pull both images
+        new Verifications() {{
+            queryService.hasImage("fabric8/s2i-java");
+            registryService.pullImageWithPolicy("fabric8/s2i-java",  pullManager, buildContext.getRegistryConfig(), false);
+            queryService.hasImage("fabric8/s1i-java");
+            registryService.pullImageWithPolicy("fabric8/s1i-java",  pullManager, buildContext.getRegistryConfig(), false);
+        }};
+    }
+
+    @Test
     public void testDockerBuildArchiveOnly() throws Exception {
         givenAnImageConfiguration(true);
         final BuildService.BuildContext buildContext = new BuildService.BuildContext.Builder()
@@ -171,6 +210,25 @@ public class BuildServiceTest {
                 .build();
         File dockerArchive = buildService.buildArchive(imageConfig, buildContext, "/i/donot/exist");
         assertNotNull(dockerArchive);
+    }
+
+    @Test
+    public void testTagImage() throws DockerAccessException, MojoExecutionException {
+        // Given
+        givenAnImageConfiguration(false);
+        final BuildService.BuildContext buildContext = new BuildService.BuildContext.Builder()
+                .mojoParameters(mojoParameters)
+                .build();
+
+        // When
+        whenBuildImage(false, true);
+        buildService.tagImage(imageConfig.getName(), "1.1.0", "quay.io/someuser");
+
+        // Then
+        thenImageIsBuilt();
+        new Verifications() {{
+            docker.tag(imageConfig.getName(), "quay.io/someuser/build-image:1.1.0", true); times = 1;
+        }};
     }
 
     private void givenAnImageConfiguration(Boolean cleanup) {
@@ -227,7 +285,7 @@ public class BuildServiceTest {
                 .build();
         File dockerArchive = buildService.buildArchive(imageConfig, buildContext, "");
 
-        buildService.buildImage(imageConfig, params, nocache, Collections.<String, String>emptyMap(), dockerArchive);
+        buildService.buildImage(imageConfig, params, nocache, false, Collections.<String, String>emptyMap(), dockerArchive);
 
     }
 }

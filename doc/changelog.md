@@ -1,5 +1,52 @@
 # ChangeLog
 
+* **0.36-SNAPSHOT**
+  - Fix multi-stage builds when an image refers to another image named/aliased up in the Dockerfile ([1443](https://github.com/fabric8io/docker-maven-plugin/issues/1443))
+
+* **0.36.0** (2021-05-23)
+  - CI builds with Maven Wrapper to ensure that Maven Wrapper files and configuration are correct ([1450](https://github.com/fabric8io/docker-maven-plugin/issues/1450))
+  - Using <external> properties in image configuration disables Docker cache during build ([1455](https://github.com/fabric8io/docker-maven-plugin/issues/1455))
+  - Update documentation to clearly state that `docker.cacheFrom.idx` is a _list_ property and should always be used with a `idx` suffix. With this change, `docker.cacheFrom` (without _idx_) is not considered anymore.
+  - A placeholder in docker.image.tag isn't replaced by the final result when used during docker:build ([1468](https://github.com/fabric8io/docker-maven-plugin/issues/1468))
+  - Add a property(`outputFile`) to dump the output of Docker commands to file ([1472]https://github.com/fabric8io/docker-maven-plugin/pull/1472)
+  - Add pulling of `cacheFrom` images during build ([1457](https://github.com/fabric8io/docker-maven-plugin/issues/1457))
+  - Update Guava to 30.1-jre and Jib-Core to 0.18.0 ([1475](https://github.com/fabric8io/docker-maven-plugin/pull/1475))
+
+* **0.35.0** (2021-04-04)
+  - Building 'spring-boot-with-jib' sample fails with NoSuchMethodError ([1384](https://github.com/fabric8io/docker-maven-plugin/issues/1384))
+  - Loading Image tarball into docker daemon fails in JIB mode ([1385](https://github.com/fabric8io/docker-maven-plugin/issues/1385))
+  - `assembly.inline` is removed when external properties are enabled ([1082](https://github.com/fabric8io/docker-maven-plugin/issues/1082))
+  - Fix Support for Podman REST API(when configured) Related to ([1330](https://github.com/fabric8io/docker-maven-plugin/issues/1330))
+  - Fix ignored `SHELL` directive when provided in XML configuration (#1418)
+  - Restore support for getting a random container name ([1352](https://github.com/fabric8io/docker-maven-plugin/issues/1352))
+  - Provide exception messages that occurred during stop ([1435](https://github.com/fabric8io/docker-maven-plugin/pull/1435))
+  - Make Maven build Reproducible ([1406](https://github.com/fabric8io/docker-maven-plugin/pull/1406))
+  - Fix Windows tests ([1416](https://github.com/fabric8io/docker-maven-plugin/pull/1417))
+  - Add a skipPom parameter, skipping a project if packaging is pom ([1388](https://github.com/fabric8io/docker-maven-plugin/pull/1388))
+  - Add support for config to specify isolation technology for container ([1376](https://github.com/fabric8io/docker-maven-plugin/pull/1376))
+  - Add Docker build cache friendly example utilizing Spring Boot Layered JAR and Maven Assembly Plugin ([1412](https://github.com/fabric8io/docker-maven-plugin/pull/1412))
+  - Retry port mapping to avoid race condition where complete port information may not be initially available in Docker Engine 20.10.5 ([1447](https://github.com/fabric8io/docker-maven-plugin/pull/1447))
+  - New `copy` goal for copying files and directories from containers to host ([752](https://github.com/fabric8io/docker-maven-plugin/issues/752) and [1405](https://github.com/fabric8io/docker-maven-plugin/pull/1405))
+  - Add support for multiple copy layers using multiple assemblies ([554](https://github.com/fabric8io/docker-maven-plugin/issues/554))
+  - Prefer HOME environment variable over the Java system property to determine the user's home directory to better resemble the golang client's behavior ([#1236](https://github.com/fabric8io/docker-maven-plugin/pull/1263)
+  - Volume binding bug in windows ([1338](https://github.com/fabric8io/docker-maven-plugin/issues/1338))
+  
+* **0.34.1** (2020-09-27)
+  - Fix NPE with "skipPush" and no build configuration given ([#1381](https://github.com/fabric8io/docker-maven-plugin/issues/1381))
+  - upgrade to jib-core 0.15.0 ([#1378](https://github.com/fabric8io/docker-maven-plugin/issues/1378))
+  - Plugin now resolves ARG provided in BuildImageConfiguration ([#1373](https://github.com/fabric8io/docker-maven-plugin/issues/1373))
+
+* **0.34.0** (2020-09-13)
+  - Support `ARG` in `FROM` ([#859](https://github.com/fabric8io/docker-maven-plugin/issues/859))
+  - Handle authentication tokens returned from credential helpers ([#1348](https://github.com/fabric8io/docker-maven-plugin/issues/1348))
+  - Migrate from joda-time to java.time ([#1025](https://github.com/fabric8io/docker-maven-plugin/issues/1025))
+    The handling of Y changes when the week straddle the New year ([Stack Overflow](https://stackoverflow.com/questions/26431882/difference-between-year-of-era-and-week-based-year))
+  - Fix JSON error when parsin tafs ([#1354](https://github.com/fabric8io/docker-maven-plugin/issues/1354))
+  - Add `skipPush` option to build image configuration ([#1243](https://github.com/fabric8io/docker-maven-plugin/issues/1243))
+  - docker.container.<alias>.ip property is no longer set ([#1242](https://github.com/fabric8io/docker-maven-plugin/issues/1242))
+  - Support `squash` in build options to squash newly built layers into a single layer ([#785](https://github.com/fabric8io/docker-maven-plugin/issues/785)) 
+  - Support for JIB mode([#1277](https://github.com/fabric8io/docker-maven-plugin/pull/1277))
+
 * **0.33.0** (2020-01-21)
   - Update to jnr-unixsocket 0.25 to solve concurrency issues ([#552](https://github.com/fabric8io/docker-maven-plugin/issues/552))
   - Udate ECR AuthorizationToken URL to new endpoint ([#1317](https://github.com/fabric8io/docker-maven-plugin/issues/1317))

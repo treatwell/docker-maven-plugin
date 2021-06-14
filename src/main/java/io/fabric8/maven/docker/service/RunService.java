@@ -20,6 +20,7 @@ import static io.fabric8.maven.docker.util.VolumeBindingUtil.resolveRelativeVolu
  */
 
 import java.io.File;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
@@ -30,6 +31,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Properties;
 import java.util.Set;
+import java.util.StringJoiner;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutionException;
 
@@ -54,6 +56,8 @@ import io.fabric8.maven.docker.model.Container;
 import io.fabric8.maven.docker.model.ContainerDetails;
 import io.fabric8.maven.docker.model.ExecDetails;
 import io.fabric8.maven.docker.model.Network;
+import io.fabric8.maven.docker.model.PortBindingException;
+import io.fabric8.maven.docker.service.ContainerTracker.ContainerShutdownDescriptor;
 import io.fabric8.maven.docker.util.ContainerNamingUtil;
 import io.fabric8.maven.docker.util.EnvUtil;
 import io.fabric8.maven.docker.util.GavLabel;
@@ -61,7 +65,8 @@ import io.fabric8.maven.docker.util.Logger;
 import io.fabric8.maven.docker.util.StartOrderResolver;
 import io.fabric8.maven.docker.wait.WaitTimeoutException;
 import io.fabric8.maven.docker.wait.WaitUtil;
-
+import net.jodah.failsafe.Failsafe;
+import net.jodah.failsafe.RetryPolicy;
 
 /**
  * Service class for helping in running containers.
@@ -122,11 +127,52 @@ public class RunService {
     }
 
     /**
-     * Create and start a container with the given image configuration.
+     * Create a container with the given image configuration.
+     *
      * @param imageConfig image configuration holding the run information and the image name
      * @param portMapping container port mapping
      * @param gavLabel label to tag the started container with
+     * @param properties properties to fill in with dynamically assigned ports
+     * @param defaultContainerNamePattern pattern to use for naming containers. Can be null in which case a default pattern is used
+     * @param buildTimestamp date which should be used as the timestamp when calculating container names
+     * @return the container id
      *
+     * @throws DockerAccessException if access to the docker backend fails
+     */
+    public String createContainer(ImageConfiguration imageConfig, PortMapping portMapping, GavLabel gavLabel,
+            Properties properties, File baseDir, String defaultContainerNamePattern, Date buildTimestamp)
+            throws DockerAccessException {
+        RunImageConfiguration runConfig = imageConfig.getRunConfiguration();
+        String imageName = imageConfig.getName();
+
+        Collection<Container> existingContainers = queryService.getContainersForImage(imageName, true);
+        String containerName = ContainerNamingUtil
+                .formatContainerName(imageConfig, defaultContainerNamePattern, buildTimestamp, existingContainers);
+
+        ContainerCreateConfig config = createContainerConfig(imageName, runConfig, portMapping, gavLabel, properties,
+                baseDir);
+
+        return docker.createContainer(config, containerName);
+    }
+
+    /**
+     * Remove a container.
+     *
+     * @param containerId the container id
+     * @param removeVolumes whether to remove volumes with container
+     *
+     * @throws DockerAccessException if access to the docker backend fails
+     */
+    public void removeContainer(String containerId, boolean removeVolumes) throws DockerAccessException {
+        docker.removeContainer(containerId, removeVolumes);
+    }
+
+    /**
+     * Create and start a container with the given image configuration.
+     *
+     * @param imageConfig image configuration holding the run information and the image name
+     * @param portMapping container port mapping
+     * @param gavLabel label to tag the started container with
      * @param properties properties to fill in with dynamically assigned ports
      * @param defaultContainerNamePattern pattern to use for naming containers. Can be null in which case a default pattern is used
      * @param buildTimestamp date which should be used as the timestamp when calculating container names
@@ -141,15 +187,8 @@ public class RunService {
                                           File baseDir,
                                           String defaultContainerNamePattern,
                                           Date buildTimestamp) throws DockerAccessException {
-        RunImageConfiguration runConfig = imageConfig.getRunConfiguration();
-        String imageName = imageConfig.getName();
-
-        Collection<Container> existingContainers = queryService.getContainersForImage(imageName, true);
-        String containerName = ContainerNamingUtil.formatContainerName(imageConfig, defaultContainerNamePattern, buildTimestamp, existingContainers);
-
-        ContainerCreateConfig config = createContainerConfig(imageName, runConfig, portMapping, gavLabel, properties, baseDir);
-
-        String id = docker.createContainer(config, containerName);
+        String id = createContainer(imageConfig, portMapping, gavLabel, properties, baseDir,
+                defaultContainerNamePattern, buildTimestamp);
         startContainer(imageConfig, id, gavLabel);
 
         if (portMapping.needsPropertiesUpdate()) {
@@ -222,10 +261,16 @@ public class RunService {
 			thrownExceptions.add(exc);
         }
 		if (!thrownExceptions.isEmpty()) {
-			DockerAccessException exception = new DockerAccessException("At least one exception thrown during container removal.");
+		    StringJoiner description = new StringJoiner(",", "(", ")");
 			for (DockerAccessException dae : thrownExceptions) {
-				exception.addSuppressed(dae);
+			    description.add(dae.getLocalizedMessage());
 			}
+
+            DockerAccessException exception = new DockerAccessException(description.toString());
+            for (DockerAccessException dae : thrownExceptions) {
+                exception.addSuppressed(dae);
+            }
+
 			throw exception;
 		}
     }
@@ -245,6 +290,23 @@ public class RunService {
      */
     public String lookupContainer(String lookup) {
         return tracker.lookupContainer(lookup);
+    }
+
+    /**
+     * Get all started containers.
+     * The containers are returned in order of their registration.
+     * If no pom label is given, then all containers are returned.
+     *
+     * @param gavLabel the label for which to get the containers or <code>null</code> for all containers
+     * @return the containers for the given label or an empty collection
+     */
+    public List<ContainerDescriptor> getContainers(GavLabel gavLabel) {
+        Collection<ContainerShutdownDescriptor> shutdownDescriptors = tracker.getShutdownDescriptors(gavLabel);
+        List<ContainerDescriptor> containers = new ArrayList<>(shutdownDescriptors.size());
+        for (ContainerShutdownDescriptor descriptor : shutdownDescriptors) {
+            containers.add(new ContainerDescriptor(descriptor.getContainerId(), descriptor.getImageConfiguration()));
+        }
+        return containers;
     }
 
     /**
@@ -371,6 +433,7 @@ public class RunService {
                 .logConfig(runConfig.getLogConfiguration())
                 .tmpfs(runConfig.getTmpfs())
                 .ulimits(runConfig.getUlimits())
+                .isolation(runConfig.getIsolation())
                 .cpuShares(runConfig.getCpuShares())
                 .cpus(runConfig.getCpus())
                 .cpuSet(runConfig.getCpuSet())
@@ -456,12 +519,23 @@ public class RunService {
     }
 
     private void updateMappedPortsAndAddresses(String containerId, PortMapping mappedPorts) throws DockerAccessException {
-        Container container = queryService.getMandatoryContainer(containerId);
-        if (container.isRunning()) {
-            mappedPorts.updateProperties(container.getPortBindings());
-        } else {
-            log.warn("Container %s is not running anymore, can not extract dynamic ports",containerId);
-        }
+        RetryPolicy<Void> retryPolicy = new RetryPolicy<Void>()
+                .withMaxAttempts(20)
+                .withBackoff(10, 100, ChronoUnit.MILLIS)
+                .handle(PortBindingException.class)
+                .onFailedAttempt(f -> log.debug("Failed to update mapped ports for container %s (attempt %d), retrying",
+                        containerId, f.getAttemptCount()))
+                .onRetriesExceeded(f -> log.warn("Failed to update mapped ports for container %s after %d retries",
+                        containerId, f.getAttemptCount()));
+
+        Failsafe.with(retryPolicy).run(() -> {
+            Container container = queryService.getMandatoryContainer(containerId);
+            if (container.isRunning()) {
+                mappedPorts.updateProperties(container.getPortBindings());
+            } else {
+                log.warn("Container %s is not running anymore, can not extract dynamic ports", containerId);
+            }
+        });
     }
 
     private void shutdown(ContainerTracker.ContainerShutdownDescriptor descriptor, boolean keepContainer, boolean removeVolumes)
@@ -555,8 +629,7 @@ public class RunService {
             log.debug("Shutdown: Wait %d ms before removing container", shutdownGracePeriod);
             WaitUtil.sleep(shutdownGracePeriod);
         }
-        // Remove the container
-        docker.removeContainer(containerId, removeVolumes);
+        removeContainer(containerId, removeVolumes);
     }
 
     private long shutdownAndWait(final String containerId, final int killGracePeriodInSeconds) throws DockerAccessException {
@@ -616,5 +689,31 @@ public class RunService {
         }
 
         return volumesCreated;
+    }
+
+    public static class ContainerDescriptor {
+
+        /**
+         * Alias of the image
+         */
+        private final String containerId;
+
+        /**
+         * The image's configuration
+         */
+        private final ImageConfiguration imageConfig;
+
+        public ContainerDescriptor(String containerId, ImageConfiguration imageConfig) {
+            this.imageConfig = imageConfig;
+            this.containerId = containerId;
+        }
+
+        public String getContainerId() {
+            return containerId;
+        }
+
+        public ImageConfiguration getImageConfig() {
+            return imageConfig;
+        }
     }
 }

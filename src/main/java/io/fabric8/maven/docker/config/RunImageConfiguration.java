@@ -71,7 +71,7 @@ public class RunImageConfiguration implements Serializable {
     @Parameter
     private Long memory;
 
-    // total memory (swap + ram) in bytes, -1 to disable
+    // total memory (swap + ram) in bytes; set equal to memory to disable; set to -1 to allow unlimited swap
     @Parameter
     private Long memorySwap;
 
@@ -106,6 +106,9 @@ public class RunImageConfiguration implements Serializable {
 
     @Parameter
     private List<String> extraHosts;
+
+    @Parameter
+    private String isolation;
 
     @Parameter
     private Long cpuShares;
@@ -255,6 +258,8 @@ public class RunImageConfiguration implements Serializable {
     public Long getMemorySwap() {
         return memorySwap;
     }
+
+    public String getIsolation() { return isolation; }
 
     public Long getCpuShares() {
         return cpuShares;
@@ -588,6 +593,11 @@ public class RunImageConfiguration implements Serializable {
 
         public Builder log(LogConfiguration log) {
             config.log = log;
+            return this;
+        }
+
+        public Builder isolation (String isolation) {
+            config.isolation = isolation;
             return this;
         }
 

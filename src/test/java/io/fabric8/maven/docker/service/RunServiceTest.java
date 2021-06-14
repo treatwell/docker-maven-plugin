@@ -1,10 +1,15 @@
 package io.fabric8.maven.docker.service;
 
+import com.google.common.collect.ImmutableMap;
+import com.google.gson.Gson;
 import com.google.gson.JsonObject;
 
 import io.fabric8.maven.docker.access.ExecException;
 import io.fabric8.maven.docker.config.StopMode;
 import io.fabric8.maven.docker.config.VolumeConfiguration;
+import io.fabric8.maven.docker.model.Container;
+import io.fabric8.maven.docker.model.PortBindingException;
+import io.fabric8.maven.docker.util.GavLabel;
 import org.apache.commons.io.IOUtils;
 import org.apache.maven.execution.MavenSession;
 import org.apache.maven.project.MavenProject;
@@ -17,6 +22,7 @@ import java.io.IOException;
 import java.lang.reflect.Field;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.Date;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -41,8 +47,10 @@ import io.fabric8.maven.docker.util.JsonFactory;
 import io.fabric8.maven.docker.util.Logger;
 import mockit.Expectations;
 import mockit.Mocked;
+import mockit.Verifications;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.assertTrue;
 
 /**
@@ -278,6 +286,34 @@ public class RunServiceTest {
     }
 
     @Test
+    public void testWithMultipleStopExceptions() throws Exception {
+        GavLabel testLabel = new GavLabel("Im:A:Test");
+
+        String firstName = "first-container:latest";
+        ImageConfiguration first = new ImageConfiguration();
+        first.setName(firstName);
+
+        String secondName = "second-container:latest";
+        ImageConfiguration second = new ImageConfiguration();
+        second.setName(secondName);
+
+        tracker.registerContainer(firstName, first, testLabel);
+        tracker.registerContainer(secondName, second, testLabel);
+
+        LogOutputSpecFactory logOutputSpecFactory = new LogOutputSpecFactory(true, true, null);
+
+        new Expectations(){{
+           docker.stopContainer(firstName, 0); result = new DockerAccessException("TEST one");
+           docker.stopContainer(secondName, 0); result = new DockerAccessException("TEST two");
+        }};
+
+        runService = new RunService(docker, queryService, tracker, logOutputSpecFactory, log);
+
+        Exception thrownException = assertThrows(DockerAccessException.class, () -> runService.stopStartedContainers(false, true, true, testLabel));
+        assertEquals("(TEST two,TEST one)", thrownException.getLocalizedMessage());
+    }
+
+    @Test
     public void testVolumesDuringStart() throws DockerAccessException {
         ServiceHub hub = new ServiceHubFactory().createServiceHub(project, session, docker, log, new LogOutputSpecFactory(true, true, null));
         List<String> volumeBinds = Collections.singletonList("sqlserver-backup-dev:/var/opt/mssql/data");
@@ -304,6 +340,42 @@ public class RunServiceTest {
         long start = System.currentTimeMillis();
         runService.stopContainer(container, createImageConfigWithStopMode(StopMode.kill), false, false);
         assertTrue("No wait", System.currentTimeMillis() - start < SHUTDOWN_WAIT);
+    }
+    
+    @Test
+    public void retryIfInsufficientPortBindingInformation(
+            @Mocked Container container,
+            @Mocked ImageConfiguration imageConfiguration,
+            @Mocked PortMapping portMapping
+    ) throws DockerAccessException {
+        new Expectations() {{
+            docker.createContainer(withAny(new ContainerCreateConfig("img")), anyString); result = "containerId";
+            portMapping.needsPropertiesUpdate(); result = true;
+            queryService.getMandatoryContainer("containerId"); result = container; times = 2;
+            container.isRunning(); result = true;
+            container.getPortBindings(); result = new PortBindingException("5432/tcp", new Gson().fromJson("{\"5432/tcp\": []}", JsonObject.class));
+            returns(ImmutableMap.of("5432/tcp", new Container.PortBinding(56741, "0.0.0.0")), ImmutableMap.of("5432/tcp", new Container.PortBinding(56741, "0.0.0.0")));
+        }};
+        String containerId = runService.createAndStartContainer(imageConfiguration, portMapping, new GavLabel("Im:A:Test"), properties, getBaseDirectory(), "blah", new Date());
+        new Verifications() {{
+            assertEquals("containerId", containerId);
+        }};
+    }
+
+    @Test(expected = PortBindingException.class)
+    public void failAfterRetryingIfInsufficientPortBindingInformation(
+            @Mocked Container container,
+            @Mocked ImageConfiguration imageConfiguration,
+            @Mocked PortMapping portMapping
+    ) throws DockerAccessException {
+        new Expectations() {{
+            docker.createContainer(withAny(new ContainerCreateConfig("img")), anyString); result = "containerId";
+            portMapping.needsPropertiesUpdate(); result = true;
+            queryService.getMandatoryContainer("containerId"); result = container; times = 20;
+            container.isRunning(); result = true;
+            container.getPortBindings(); result = new PortBindingException("5432/tcp", new Gson().fromJson("{\"5432/tcp\": []}", JsonObject.class));
+        }};
+        runService.createAndStartContainer(imageConfiguration, portMapping, new GavLabel("Im:A:Test"), properties, getBaseDirectory(), "blah", new Date());
     }
 
     private ImageConfiguration createImageConfig(int wait, int kill) {
@@ -367,6 +439,7 @@ public class RunServiceTest {
                         .memorySwap(1L)
                         .cpus(1000000000L)
                         .cpuSet("0,1")
+                        .isolation("default")
                         .cpuShares(1L)
                         .env(env())
                         .cmd("date")

@@ -19,7 +19,7 @@ import static io.fabric8.maven.docker.util.EnvUtil.*;
  * For {@link PropertyMode#Fallback} we use the config value if it is non-null, else the property value.
  *
  * For Override and Fallback mode, merging may take place as dictated by the {@link ValueCombinePolicy}
- * defined in the {@link ConfigKey}, or as overriden by the property &lt;prefix.someproperty&gt<b>._combine</b>
+ * defined in the {@link ConfigKey}, or as overridden by the property &lt;prefix.someproperty&gt;<b>._combine</b>
  * ({@link EnvUtil#PROPERTY_COMBINE_POLICY_SUFFIX}).
  *
  * If {@link ValueCombinePolicy#Replace} is used, only the prioritized value (first non-null) is used.
@@ -43,7 +43,9 @@ public class ValueProvider {
     private LongValueExtractor longValueExtractor;
     private BooleanValueExtractor booleanValueExtractor;
     private DoubleValueExtractor doubleValueExtractor;
-    
+    private PropertiesListValueExtractor propertiesListValueExtractor;
+    private NestedValueExtractor nestedValueExtractor;
+
     /**
      * Initiates ValueProvider which is to work with data from the given properties.
      *
@@ -66,6 +68,8 @@ public class ValueProvider {
         longValueExtractor = new LongValueExtractor();
         booleanValueExtractor = new BooleanValueExtractor();
         doubleValueExtractor = new DoubleValueExtractor();
+        propertiesListValueExtractor = new PropertiesListValueExtractor();
+        nestedValueExtractor = new NestedValueExtractor();
     }
 
     public String getString(ConfigKey key, String fromConfig) {
@@ -108,6 +112,10 @@ public class ValueProvider {
         return doubleValueExtractor.getFromPreferredSource(prefix, key, fromConfig);
     }
 
+    public List<Properties> getPropertiesList(ConfigKey key, List<Properties> fromConfig) {
+        return propertiesListValueExtractor.getFromPreferredSource(prefix, key, fromConfig);
+    }
+
     public <T> T getObject(ConfigKey key, T fromConfig, final com.google.common.base.Function<String, T> converter) {
         ValueExtractor<T> arbitraryExtractor = new ValueExtractor<T>() {
             @Override
@@ -117,6 +125,11 @@ public class ValueProvider {
         };
 
         return arbitraryExtractor.getFromPreferredSource(prefix, key, fromConfig);
+    }
+
+    public List<ValueProvider> getNestedList(ConfigKey key) {
+        List<ValueProvider> nested = nestedValueExtractor.getFromPreferredSource(prefix, key, null);
+        return nested == null ? Collections.emptyList() : nested;
     }
 
     /**
@@ -305,6 +318,50 @@ public class ValueProvider {
                 }
             }
             return merged;
+        }
+    }
+
+    private class PropertiesListValueExtractor extends ValueExtractor<List<Properties>> {
+        @Override
+        protected List<Properties> withPrefix(String prefix, ConfigKey key, Properties properties) {
+            return extractFromPropertiesAsListOfProperties(key.asPropertyKey(prefix), properties);
+        }
+
+        @Override
+        protected List<Properties> merge(ConfigKey key, List<List<Properties>> values) {
+            List<Properties> merged = new ArrayList<>();
+            for (List<Properties> value : values) {
+                merged.addAll(value);
+            }
+            return merged;
+        }
+    }
+
+    private class NestedValueExtractor extends ValueExtractor<List<ValueProvider>> {
+
+        @Override
+        protected List<ValueProvider> withPrefix(String prefix, ConfigKey key, Properties properties) {
+            Map<String, String> props = extractFromPropertiesAsMap(key.asPropertyKey(prefix), properties);
+
+            if (props == null) {
+                return Collections.emptyList();
+            }
+
+            Properties nestedProperties = new Properties();
+            nestedProperties.putAll(props);
+
+            Map<Integer, ValueProvider> res = new TreeMap<>();
+            for(Map.Entry<String, String> entry : props.entrySet()) {
+                String pfx = entry.getKey().substring(0, entry.getKey().indexOf('.'));
+                try {
+                    int n = Integer.parseInt(pfx);
+                    res.computeIfAbsent(n, k -> new ValueProvider(pfx + '.' + prefix, nestedProperties, propertyMode));
+                } catch (NumberFormatException ex) {
+                    // Skip this entry
+                }
+            }
+
+            return new ArrayList<>(res.values());
         }
     }
 }

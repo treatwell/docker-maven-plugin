@@ -26,6 +26,7 @@ import java.util.function.Supplier;
 import io.fabric8.maven.docker.config.Arguments;
 import io.fabric8.maven.docker.config.AssemblyConfiguration;
 import io.fabric8.maven.docker.config.BuildImageConfiguration;
+import io.fabric8.maven.docker.config.CopyConfiguration;
 import io.fabric8.maven.docker.config.HealthCheckConfiguration;
 import io.fabric8.maven.docker.config.ImageConfiguration;
 import io.fabric8.maven.docker.config.LogConfiguration;
@@ -72,9 +73,11 @@ public class PropertyConfigHandler implements ExternalConfigHandler {
         RunImageConfiguration run = extractRunConfiguration(fromConfig, valueProvider);
         BuildImageConfiguration build = extractBuildConfiguration(fromConfig, valueProvider, project);
         WatchImageConfiguration watch = extractWatchConfig(fromConfig, valueProvider);
+        CopyConfiguration copyConfig = extractCopyConfig(fromConfig, valueProvider);
         String name = valueProvider.getString(NAME, fromConfig.getName());
         String alias = valueProvider.getString(ALIAS, fromConfig.getAlias());
         String removeNamePattern = valueProvider.getString(REMOVE_NAME_PATTERN, fromConfig.getRemoveNamePattern());
+        String copyNamePattern = valueProvider.getString(COPY_NAME_PATTERN, fromConfig.getCopyNamePattern());
         String stopNamePattern = valueProvider.getString(STOP_NAME_PATTERN, fromConfig.getStopNamePattern());
 
         if (name == null) {
@@ -86,10 +89,12 @@ public class PropertyConfigHandler implements ExternalConfigHandler {
                         .name(name)
                         .alias(alias)
                         .removeNamePattern(removeNamePattern)
+                        .copyNamePattern(copyNamePattern)
                         .stopNamePattern(stopNamePattern)
                         .runConfig(run)
                         .buildConfig(build)
                         .watchConfig(watch)
+                        .copyConfig(copyConfig)
                         .build());
     }
 
@@ -127,6 +132,7 @@ public class PropertyConfigHandler implements ExternalConfigHandler {
     }
 
 
+    @SuppressWarnings("deprecation")
     private BuildImageConfiguration extractBuildConfiguration(ImageConfiguration fromConfig, ValueProvider valueProvider, MavenProject project) {
         BuildImageConfiguration config = fromConfig.getBuildConfiguration();
         if (!buildConfigured(config, valueProvider, project)) {
@@ -137,10 +143,12 @@ public class PropertyConfigHandler implements ExternalConfigHandler {
                 .cmd(extractArguments(valueProvider, CMD, config == null ? null : config.getCmd()))
                 .cleanup(valueProvider.getString(CLEANUP, config == null ? null : config.getCleanup()))
                 .noCache(valueProvider.getBoolean(NO_CACHE, config == null ? null : config.getNoCache()))
-                .cacheFrom(valueProvider.getString(CACHE_FROM, config == null ? null : (config.getCacheFrom() == null ? null : config.getCacheFrom().toString())))
+                .squash(valueProvider.getBoolean(SQUASH, config == null ? null : config.getSquash()))
+                .cacheFrom(valueProvider.getList(CACHE_FROM, config == null ? null : config.getCacheFrom()))
                 .optimise(valueProvider.getBoolean(OPTIMISE, config == null ? null : config.getOptimise()))
                 .entryPoint(extractArguments(valueProvider, ENTRYPOINT, config == null ? null : config.getEntryPoint()))
                 .assembly(extractAssembly(config == null ? null : config.getAssemblyConfiguration(), valueProvider))
+                .assemblies(extractAssemblies(config == null ? null : config.getAssemblyConfigurations(), valueProvider))
                 .env(CollectionUtils.mergeMaps(
                         valueProvider.getMap(ENV_BUILD, config == null ? null : config.getEnv()),
                         valueProvider.getMap(ENV, Collections.<String, String>emptyMap())
@@ -158,6 +166,7 @@ public class PropertyConfigHandler implements ExternalConfigHandler {
                 .maintainer(valueProvider.getString(MAINTAINER, config == null ? null : config.getMaintainer()))
                 .workdir(valueProvider.getString(WORKDIR, config == null ? null : config.getWorkdir()))
                 .skip(valueProvider.getBoolean(SKIP_BUILD, config == null ? null : config.getSkip()))
+                .skipPush(valueProvider.getBoolean(SKIP_PUSH, config == null ? null : config.getSkipPush()))
                 .imagePullPolicy(valueProvider.getString(IMAGE_PULL_POLICY_BUILD, config == null ? null : config.getImagePullPolicy()))
                 .contextDir(valueProvider.getString(CONTEXT_DIR, config == null ? null : config.getContextDirRaw()))
                 .dockerArchive(valueProvider.getString(DOCKER_ARCHIVE, config == null ? null : config.getDockerArchiveRaw()))
@@ -216,6 +225,7 @@ public class PropertyConfigHandler implements ExternalConfigHandler {
                 .imagePullPolicy(valueProvider.getString(IMAGE_PULL_POLICY_RUN, config == null ? null : config.getImagePullPolicy()))
                 .ulimits(extractUlimits(config == null ? null : config.getUlimits(), valueProvider))
                 .tmpfs(valueProvider.getList(TMPFS, config == null ? null : config.getTmpfs()))
+                .isolation(valueProvider.getString(ISOLATION, config == null ? null : config.getIsolation()))
                 .cpuShares(valueProvider.getLong(CPUSHARES, config == null ? null : config.getCpuShares()))
                 .cpus(valueProvider.getLong(CPUS, config == null ? null : config.getCpus()))
                 .cpuSet(valueProvider.getString(CPUSET, config == null ? null : config.getCpuSet()))
@@ -232,9 +242,29 @@ public class PropertyConfigHandler implements ExternalConfigHandler {
             .build();
     }
 
+    private List<AssemblyConfiguration> extractAssemblies(List<AssemblyConfiguration> config, ValueProvider valueProvider) {
+        List<ValueProvider> assemblyConfigProviders = valueProvider.getNestedList(ASSEMBLIES);
+        List<AssemblyConfiguration> assemblies = new ArrayList<>();
+
+        int count = Math.max(assemblyConfigProviders.size(), config == null ? 0 : config.size());
+
+        for (int i = 0; i < count; i++) {
+            AssemblyConfiguration fromConfig = config == null || i >= config.size() ? null : config.get(i);
+
+            if (i >= assemblyConfigProviders.size()) {
+                assemblies.add(fromConfig);
+            } else {
+                ValueProvider provider = assemblyConfigProviders.get(i);
+                assemblies.add(extractAssembly(fromConfig, provider));
+            }
+        }
+
+        return assemblies;
+    }
+
     @SuppressWarnings("deprecation")
     private AssemblyConfiguration extractAssembly(AssemblyConfiguration config, ValueProvider valueProvider) {
-        return new AssemblyConfiguration.Builder()
+        AssemblyConfiguration.Builder builder = new AssemblyConfiguration.Builder()
                 .targetDir(valueProvider.getString(ASSEMBLY_BASEDIR, config == null ? null : config.getTargetDir()))
                 .descriptor(valueProvider.getString(ASSEMBLY_DESCRIPTOR, config == null ? null : config.getDescriptor()))
                 .descriptorRef(valueProvider.getString(ASSEMBLY_DESCRIPTOR_REF, config == null ? null : config.getDescriptorRef()))
@@ -244,8 +274,13 @@ public class PropertyConfigHandler implements ExternalConfigHandler {
                 .permissions(valueProvider.getString(ASSEMBLY_PERMISSIONS, config == null ? null : config.getPermissionsRaw()))
                 .user(valueProvider.getString(ASSEMBLY_USER, config == null ? null : config.getUser()))
                 .mode(valueProvider.getString(ASSEMBLY_MODE, config == null ? null : config.getModeRaw()))
-                .tarLongFileMode(valueProvider.getString(ASSEMBLY_TARLONGFILEMODE, config == null ? null : config.getTarLongFileMode()))
-                .build();
+                .assemblyDef(config == null ? null : config.getInline())
+                .tarLongFileMode(valueProvider.getString(ASSEMBLY_TARLONGFILEMODE, config == null ? null : config.getTarLongFileMode()));
+        String name = valueProvider.getString(ASSEMBLY_NAME, config == null ? null : config.getName());
+        if (name != null) {
+            builder.name(name);
+        }
+        return builder.build();
     }
 
     private HealthCheckConfiguration extractHealthCheck(HealthCheckConfiguration config, ValueProvider valueProvider) {
@@ -343,6 +378,13 @@ public class PropertyConfigHandler implements ExternalConfigHandler {
                 .postExec(valueProvider.getString(WATCH_POSTEXEC, config == null ? null : config.getPostExec()))
                 .mode(valueProvider.getString(WATCH_POSTGOAL, config == null || config.getMode() == null ? null : config.getMode().name()))
                 .build();
+    }
+
+    private CopyConfiguration extractCopyConfig(ImageConfiguration fromConfig, ValueProvider valueProvider) {
+        final CopyConfiguration config = fromConfig.getCopyConfiguration();
+        final List<Properties> entriesProperties = config == null ? null : config.getEntriesAsListOfProperties();
+        return new CopyConfiguration.Builder()
+                .entriesAsListOfProperties(valueProvider.getPropertiesList(COPY_ENTRIES, entriesProperties)).build();
     }
 
     private List<UlimitConfig> extractUlimits(List<UlimitConfig> config, ValueProvider valueProvider) {

@@ -5,6 +5,7 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
 import java.util.concurrent.TimeUnit;
+import java.util.function.UnaryOperator;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -31,17 +32,20 @@ public class EnvUtil {
 
     public static final String MAVEN_PROPERTY_REGEXP = "\\s*\\$\\{\\s*([^}]+)\\s*}\\s*$";
 
-    // Standard HTTPS port (IANA registered). The other 2375 with plain HTTP is used only in older
-    // docker installations.
-    public static final String DOCKER_HTTPS_PORT = "2376";
+    // Standard HTTPS port (IANA registered) is 2376.
+    // The other port 2375 with plain HTTP is used only in older docker installations.
+    public static final String DOCKER_HTTP_PORT = "2375";
 
     public static final String PROPERTY_COMBINE_POLICY_SUFFIX = "_combine";
 
+    // injection point for unit tests
+    private static UnaryOperator<String> systemGetEnv = System::getenv;
+
     private EnvUtil() {}
 
-    // Convert docker host URL to an http URL
+    // Convert docker host URL to an HTTP(s) URL
     public static String convertTcpToHttpUrl(String connect) {
-        String protocol = connect.contains(":" + DOCKER_HTTPS_PORT) ? "https:" : "http:";
+        String protocol = connect.contains(":" + DOCKER_HTTP_PORT) ? "http:" : "https:";
         return connect.replaceFirst("^tcp:", protocol);
     }
 
@@ -141,7 +145,7 @@ public class EnvUtil {
     /**
      * Remove empty members of a list.
      * @param input A list of String
-     * @return A list of Non-Empty (length>0) String
+     * @return A list of Non-Empty (length&gt;0) String
      */
     @Nonnull
     public static List<String> removeEmptyEntries(@Nullable List<String> input) {
@@ -215,7 +219,7 @@ public class EnvUtil {
      * Extract part of given properties as a map. The given prefix is used to find the properties,
      * the rest of the property name is used as key for the map.
      *
-     * NOTE: If key is "._combine" ({@link #PROPERTY_COMBINE_POLICY_SUFFIX)} it is ignored! This is reserved for combine policy tweaking.
+     * NOTE: If key is "._combine"  it is ignored! This is reserved for combine policy tweaking.
      *
      * @param prefix prefix which specifies the part which should be extracted as map
      * @param properties properties to extract from
@@ -244,7 +248,7 @@ public class EnvUtil {
      * given properties from which the list should be extracted, the rest is used as a numeric index. If the rest
      * is not numeric, the order is not determined (all those props are appended to the end of the list)
      *
-     * NOTE: If suffix/index is "._combine" ({@link #PROPERTY_COMBINE_POLICY_SUFFIX)} it is ignored!
+     * NOTE: If suffix/index is "._combine"  it is ignored!
      * This is reserved for combine policy tweaking.
      *
      * @param prefix for selecting the properties from which the list should be extracted
@@ -277,6 +281,69 @@ public class EnvUtil {
         List<String> ret = new ArrayList<>(orderedMap.values());
         ret.addAll(rest);
         return ret.size() > 0 ? ret : null;
+    }
+
+    public static List<Properties> extractFromPropertiesAsListOfProperties(String prefix, Properties properties) {
+        final String prefixDot = prefix + ".";
+        final int prefixDotLength = prefixDot.length();
+
+        final Map<Integer,Properties> ordered = new TreeMap<>();
+        final Map<String, Properties> rest = new TreeMap<>();
+
+        Enumeration<?> names = properties.propertyNames();
+        while (names.hasMoreElements()) {
+            final String key = (String) names.nextElement();
+            if (!propMatchesPrefix(prefixDot, key)) {
+                continue;
+            }
+            final String propertyKey = key.substring(prefixDotLength);
+            if (PROPERTY_COMBINE_POLICY_SUFFIX.equals(propertyKey)) {
+                continue;
+            }
+            final int firstDotIndex = propertyKey.indexOf('.');
+            final String entryName = getKeyBefore(propertyKey, firstDotIndex);
+            final String entryPropertyKey = getKeyAfter(propertyKey, firstDotIndex);
+            final String entryPropertyValue = properties.getProperty(key);
+            try {
+                final int entryIndex = Integer.parseInt(entryName);
+                final Properties entry = ordered.get(entryIndex);
+                if (entry == null) {
+                    ordered.put(entryIndex, newProperties(entryPropertyKey, entryPropertyValue));
+                } else {
+                    entry.put(entryPropertyKey, entryPropertyValue);
+                }
+            } catch (NumberFormatException ignored) {
+                final Properties entry = rest.get(entryName);
+                if (entry == null) {
+                    rest.put(entryName, newProperties(entryPropertyKey, entryPropertyValue));
+                } else {
+                    entry.put(entryPropertyKey, entryPropertyValue);
+                }
+            }
+        }
+        final List<Properties> all = new ArrayList<>(ordered.values());
+        all.addAll(rest.values());
+        return all.isEmpty() ? null : all;
+    }
+
+    private static String getKeyBefore(String name, int separatorIndex) {
+        if (separatorIndex == -1) {
+            return name;
+        }
+        return name.substring(0, separatorIndex);
+    }
+
+    private static String getKeyAfter(String name, int separatorIndex) {
+        if (separatorIndex == -1 || separatorIndex >= name.length()) {
+            return "";
+        }
+        return name.substring(separatorIndex + 1);
+    }
+
+    private static Properties newProperties(Object key, Object value) {
+        final Properties properties = new Properties();
+        properties.put(key, value);
+        return properties;
     }
 
     /**
@@ -446,5 +513,17 @@ public class EnvUtil {
         // and it turns out that System.getProperty("maven.version") does not return the value.
         String mavenVersion = mavenSession.getSystemProperties().getProperty("maven.version", "3");
         return greaterOrEqualsVersion(mavenVersion, "3.5.0");
+    }
+
+    /**
+     * Get User's HOME directory path
+     * @return a String value for user's home directory
+     */
+    public static String getUserHome() {
+        String homeDir = systemGetEnv.apply("HOME");
+        if (homeDir == null) {
+            homeDir =  System.getProperty("user.home");
+        }
+        return homeDir;
     }
 }
